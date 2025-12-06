@@ -29,7 +29,10 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,14 +44,16 @@ jobs:
           # 硬件型号选择，此选择适用于大多数MT7981设备
           subtarget: mt7981
           # 设备型号选择，如不确定可留空，编译器会使用.config中的默认值
-          # device: <在此填写你的具体设备型号，例如：zbtlink_zbt-z8102ax>
+          device: zbtlink_zbt-z8102ax-v2
 
       # 核心步骤：从编译产物中提取内核文件
       - name: Extract Kernel Image
         run: |
           cd openwrt/bin/targets/mediatek/filogic/
           # 寻找并重命名内核镜像文件，常见的命名模式有kernel.bin、initramfs-kernel.bin等
-          find . -name "*kernel*.bin" -o -name "*boot*.img" | head -1 | xargs -I {} cp {} ./kernel-mt7981-custom.bin
+          find . -name "*kernel*.bin" -o -name "*boot*.img" \
+            | head -1 \
+            | xargs -I {} cp {} ./kernel-mt7981-custom.bin
           echo "Kernel image extracted as: kernel-mt7981-custom.bin"
 
       - name: Upload Kernel Artifact
