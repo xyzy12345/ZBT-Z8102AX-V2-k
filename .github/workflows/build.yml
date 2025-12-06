@@ -1,0 +1,59 @@
+name: Build OpenWrt Kernel for MT7981
+
+on:
+  workflow_dispatch: # 仅手动触发
+  push:
+    branches: [ main ]
+
+env:
+  # 1. 选择源码（二选一，取消注释一个）
+  # 方案A：使用优化好的稳定源码（推荐，驱动完善，内核版本可能是5.4/5.15）
+  REPO_URL: https://github.com/hanwckf/immortalwrt-mt798x
+  REPO_BRANCH: main
+  # 方案B：使用官方最新源码（内核新，但需自行确保驱动，可能为6.6）
+  # REPO_URL: https://github.com/openwrt/openwrt
+  # REPO_BRANCH: main
+
+  # 2. 使用我们上传的配置文件
+  CONFIG_FILE: .config
+  # 3. 禁止修改 .config，保持我们的自定义
+  TARGET_CONFIG: diff
+  # 4. 启用文件系统缓存，加速后续编译
+  UPLOAD_FIRMWARE: false
+  UPLOAD_CONFIG: false
+  UPLOAD_IB: false
+  SAVE_CACHE: true
+  UPLOAD_COW_TRANSFER: false
+  UPLOAD_RELEASE: false
+  UPLOAD_FIRMWARE_FOR_COW: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build OpenWrt
+        uses: P3TERX/Actions-OpenWrt@main
+        with:
+          target: mediatek/filogic
+          # 硬件型号选择，此选择适用于大多数MT7981设备
+          subtarget: mt7981
+          # 设备型号选择，如不确定可留空，编译器会使用.config中的默认值
+          # device: <在此填写你的具体设备型号，例如：zbtlink_zbt-z8102ax>
+
+      # 核心步骤：从编译产物中提取内核文件
+      - name: Extract Kernel Image
+        run: |
+          cd openwrt/bin/targets/mediatek/filogic/
+          # 寻找并重命名内核镜像文件，常见的命名模式有kernel.bin、initramfs-kernel.bin等
+          find . -name "*kernel*.bin" -o -name "*boot*.img" | head -1 | xargs -I {} cp {} ./kernel-mt7981-custom.bin
+          echo "Kernel image extracted as: kernel-mt7981-custom.bin"
+
+      - name: Upload Kernel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mt7981-kernel
+          path: openwrt/bin/targets/mediatek/filogic/kernel-mt7981-custom.bin
+          if-no-files-found: error
