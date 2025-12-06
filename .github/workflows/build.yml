@@ -10,7 +10,7 @@ on:
 env:
   # 源码仓库：使用为 MT798x 深度优化的分支（推荐）
   REPO_URL: https://github.com/hanwckf/immortalwrt-mt798x
-  REPO_BRANCH: main
+  REPO_BRANCH: openwrt-21.02
   
   # 你的设备型号（OpenWrt 识别的 DTS 兼容性字符串）
   DEVICE_COMPATIBLE: zbtlink,zbt-z8102ax
