@@ -93,14 +93,19 @@ jobs:
       - name: Extract Kernel Image
         if: steps.compile.outputs.status == 'success'
         run: |
-          # 查找目标目录
-          TARGET_DIR=$(find openwrt/bin/targets -type d -name "mediatek" -o -name "filogic" | head -1)
+          # 查找目标目录 - 优先查找 mediatek 相关目录
+          TARGET_DIR=$(find openwrt/bin/targets -type d -path '*/mediatek/*' | head -1)
+          
+          # 如果没找到，查找任何有效的目标目录（至少包含一些 .bin 或 .img 文件）
           if [ -z "$TARGET_DIR" ]; then
-            TARGET_DIR=$(find openwrt/bin/targets -mindepth 2 -maxdepth 2 -type d | head -1)
+            echo "Mediatek target not found, looking for any target directory with build artifacts..."
+            TARGET_DIR=$(find openwrt/bin/targets -mindepth 2 -maxdepth 2 -type d -exec sh -c 'ls "$1"/*.bin 2>/dev/null || ls "$1"/*.img 2>/dev/null' _ {} \; -print -quit)
           fi
           
           if [ -z "$TARGET_DIR" ]; then
-            echo "Error: Could not find target directory"
+            echo "Error: Could not find target directory with build artifacts"
+            echo "Available directories:"
+            find openwrt/bin/targets -type d
             exit 1
           fi
           
@@ -112,6 +117,7 @@ jobs:
           
           if [ -z "$KERNEL_FILE" ]; then
             echo "Error: Could not find kernel file"
+            echo "Available files:"
             ls -la
             exit 1
           fi
