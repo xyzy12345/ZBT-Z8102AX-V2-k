@@ -93,9 +93,31 @@ jobs:
       - name: Extract Kernel Image
         if: steps.compile.outputs.status == 'success'
         run: |
-          cd openwrt/bin/targets/*/*
+          # 查找目标目录
+          TARGET_DIR=$(find openwrt/bin/targets -type d -name "mediatek" -o -name "filogic" | head -1)
+          if [ -z "$TARGET_DIR" ]; then
+            TARGET_DIR=$(find openwrt/bin/targets -mindepth 2 -maxdepth 2 -type d | head -1)
+          fi
+          
+          if [ -z "$TARGET_DIR" ]; then
+            echo "Error: Could not find target directory"
+            exit 1
+          fi
+          
+          cd "$TARGET_DIR"
+          echo "Looking for kernel in: $PWD"
+          
           # 寻找并重命名内核镜像文件，常见的命名模式有kernel.bin、initramfs-kernel.bin等
-          find . -name "*kernel*.bin" -o -name "*boot*.img" | head -1 | xargs -I {} cp {} ./kernel-mt7981-custom.bin
+          KERNEL_FILE=$(find . -type f \( -name "*kernel*.bin" -o -name "*boot*.img" \) | head -1)
+          
+          if [ -z "$KERNEL_FILE" ]; then
+            echo "Error: Could not find kernel file"
+            ls -la
+            exit 1
+          fi
+          
+          echo "Found kernel file: $KERNEL_FILE"
+          cp "$KERNEL_FILE" ./kernel-mt7981-custom.bin
           echo "Kernel image extracted as: kernel-mt7981-custom.bin"
           echo "FIRMWARE=$PWD" >> $GITHUB_ENV
 
