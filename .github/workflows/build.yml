@@ -4,11 +4,13 @@ on:
   workflow_dispatch: # 仅手动触发
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 env:
   # 源码仓库：使用为 MT798x 深度优化的分支（推荐）
   REPO_URL: https://github.com/hanwckf/immortalwrt-mt798x
-  REPO_BRANCH: main
+  REPO_BRANCH: openwrt-21.02
   
   # 你的设备型号（OpenWrt 识别的 DTS 兼容性字符串）
   DEVICE_COMPATIBLE: zbtlink,zbt-z8102ax
@@ -18,17 +20,7 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
-    # 缓存设置必须与 `strategy` 保持同一级缩进
-    strategy:
-      fail-fast: false
-      # 可以在这里添加矩阵构建，例如：
-      # matrix:
-      #   kernel: [5.4, 5.15, 6.1]
-    cache:
-      paths:
-        - openwrt/dl/
-        - openwrt/build_dir/
-
+      actions: read
 
     steps:
       # 步骤1：检出本仓库代码（获取你上传的 .config 文件）
@@ -38,52 +30,77 @@ jobs:
       # 步骤2：准备 OpenWrt 编译环境与源码
       - name: Prepare & Build OpenWrt
         run: |
-          # 2.1 克隆源码（浅克隆以节省时间和空间）
+          # 2.1 安装编译依赖
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          
+          # 2.2 克隆源码（浅克隆以节省时间和空间）
           echo "正在克隆源码仓库..."
           git clone --depth=1 ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt
           cd openwrt
           
-          # 2.2 应用自定义内核配置文件
+          # 2.3 应用自定义内核配置文件
           echo "应用内核配置文件..."
           if [ -f "../.config" ]; then
             cp ../.config .config
             echo "自定义 .config 文件已应用。"
           else
             echo "警告：未在仓库根目录找到 .config 文件，将使用源码默认配置。"
-            # 你可以在此处替换为获取基础配置的命令，例如：
-            # cp ./defconfig/mt7981-ax3000.config .config
           fi
           
-          # 2.3 更新并安装软件包源（feeds）
+          # 2.4 更新并安装软件包源（feeds）
           echo "更新并安装 feeds..."
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           
-          # 2.4 准备配置并下载依赖
+          # 2.5 准备配置并下载依赖
           echo "准备编译配置..."
           make defconfig
           echo "下载编译依赖..."
           make download -j$(nproc) || make download -j1 V=s
           
-          # 2.5 开始核心编译（通过环境变量指定目标设备）
+          # 2.6 开始核心编译（通过环境变量指定目标设备）
           echo "开始内核编译，目标设备: ${{ env.DEVICE_COMPATIBLE }}"
-          make -j$(nproc) V=s TARGET_SUBTARGET="mt7981" DEVICE_MODEL="${{ env.DEVICE_COMPATIBLE }}" || make -j1 V=s TARGET_SUBTARGET="mt7981" DEVICE_MODEL="${{ env.DEVICE_COMPATIBLE }}"
+          make -j$(nproc) V=s || make -j1 V=s
           
           echo "编译流程已完成！"
 
       # 步骤3：从编译产物中提取内核镜像文件
       - name: Extract Kernel Image
         run: |
-          cd openwrt/bin/targets/mediatek/filogic/
-          echo "正在在内核镜像文件..."
+          # 查找目标目录 - 优先查找 mediatek 相关目录
+          echo "正在查找内核镜像文件..."
+          TARGET_DIR=$(find openwrt/bin/targets -type d -path '*/mediatek/*' | head -1)
+          
+          # 如果没找到，查找任何有效的目标目录
+          if [ -z "$TARGET_DIR" ]; then
+            echo "Mediatek target not found, looking for any target directory..."
+            TARGET_DIR=$(find openwrt/bin/targets -mindepth 2 -maxdepth 2 -type d | head -1)
+          fi
+          
+          if [ -z "$TARGET_DIR" ]; then
+            echo "错误：未找到编译产物目录！"
+            echo "可用目录："
+            find openwrt/bin/targets -type d
+            exit 1
+          fi
+          
+          cd "$TARGET_DIR"
+          echo "在目录中查找内核: $PWD"
+          
           # 查找内核文件，常见命名格式
-          KERNEL_FILE=$(find . -name "*kernel*.bin" -o -name "*boot*.img" | head -n 1)
+          KERNEL_FILE=$(find . -type f \( -name "*kernel*.bin" -o -name "*boot*.img" \) | head -n 1)
           
           if [ -n "$KERNEL_FILE" ]; then
             echo "找到内核文件: $KERNEL_FILE"
             cp "$KERNEL_FILE" ./kernel-mt7981-custom.bin
             echo "内核文件已提取并重命名为: kernel-mt7981-custom.bin"
             ls -lh ./kernel-mt7981-custom.bin
+            echo "FIRMWARE=$PWD" >> $GITHUB_ENV
           else
             echo "错误：未在编译产物中找到内核文件！"
             echo "当前目录内容："
@@ -96,6 +113,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mt7981-kernel
-          path: openwrt/bin/targets/mediatek/filogic/kernel-mt7981-custom.bin
+          path: ${{ env.FIRMWARE }}/kernel-mt7981-custom.bin
           if-no-files-found: error
           retention-days: 7
