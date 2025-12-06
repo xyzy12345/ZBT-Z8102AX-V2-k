@@ -4,6 +4,8 @@ on:
   workflow_dispatch: # 仅手动触发
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 env:
   # 1. 选择源码（二选一，取消注释一个）
