@@ -8,26 +8,12 @@ on:
     branches: [main]
 
 env:
-  # 1. 选择源码（二选一，取消注释一个）
-  # 方案A：使用优化好的稳定源码（推荐，驱动完善，内核版本可能是5.4/5.15）
+  # 源码仓库：使用为 MT798x 深度优化的分支（推荐）
   REPO_URL: https://github.com/hanwckf/immortalwrt-mt798x
   REPO_BRANCH: main
-  # 方案B：使用官方最新源码（内核新，但需自行确保驱动，可能为6.6）
-  # REPO_URL: https://github.com/openwrt/openwrt
-  # REPO_BRANCH: main
-
-  # 2. 使用我们上传的配置文件
-  CONFIG_FILE: .config
-  # 3. 禁止修改 .config，保持我们的自定义
-  TARGET_CONFIG: diff
-  # 4. 启用文件系统缓存，加速后续编译
-  UPLOAD_FIRMWARE: false
-  UPLOAD_CONFIG: false
-  UPLOAD_IB: false
-  SAVE_CACHE: true
-  UPLOAD_COW_TRANSFER: false
-  UPLOAD_RELEASE: false
-  UPLOAD_FIRMWARE_FOR_COW: false
+  
+  # 你的设备型号（OpenWrt 识别的 DTS 兼容性字符串）
+  DEVICE_COMPATIBLE: zbtlink,zbt-z8102ax
 
 jobs:
   build:
@@ -35,104 +21,98 @@ jobs:
     permissions:
       contents: read
       actions: read
+
     steps:
-      - name: Checkout
+      # 步骤1：检出本仓库代码（获取你上传的 .config 文件）
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Initialization environment
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      # 步骤2：准备 OpenWrt 编译环境与源码
+      - name: Prepare & Build OpenWrt
         run: |
+          # 2.1 安装编译依赖
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           sudo -E apt-get -qq update
           sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
-
-      - name: Clone source code
-        working-directory: /workdir
-        run: |
-          df -hT $PWD
-          git clone $REPO_URL -b $REPO_BRANCH openwrt
-          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-
-      - name: Update feeds
-        run: cd openwrt && ./scripts/feeds update -a
-
-      - name: Install feeds
-        run: cd openwrt && ./scripts/feeds install -a
-
-      - name: Load custom configuration
-        run: |
-          [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+          
+          # 2.2 克隆源码（浅克隆以节省时间和空间）
+          echo "正在克隆源码仓库..."
+          git clone --depth=1 ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt
           cd openwrt
+          
+          # 2.3 应用自定义内核配置文件
+          echo "应用内核配置文件..."
+          if [ -f "../.config" ]; then
+            cp ../.config .config
+            echo "自定义 .config 文件已应用。"
+          else
+            echo "警告：未在仓库根目录找到 .config 文件，将使用源码默认配置。"
+          fi
+          
+          # 2.4 更新并安装软件包源（feeds）
+          echo "更新并安装 feeds..."
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          
+          # 2.5 准备配置并下载依赖
+          echo "准备编译配置..."
           make defconfig
+          echo "下载编译依赖..."
+          make download -j$(nproc) || make download -j1 V=s
+          
+          # 2.6 开始核心编译（通过环境变量指定目标设备）
+          echo "开始内核编译，目标设备: ${{ env.DEVICE_COMPATIBLE }}"
+          make -j$(nproc) V=s || make -j1 V=s
+          
+          echo "编译流程已完成！"
 
-      - name: Download package
-        id: package
-        run: |
-          cd openwrt
-          make download -j8
-          find dl -size -1024c -exec ls -l {} \;
-          find dl -size -1024c -exec rm -f {} \;
-
-      - name: Compile the firmware
-        id: compile
-        run: |
-          cd openwrt
-          echo -e "$(nproc) thread compile"
-          make -j$(nproc) || make -j1 || make -j1 V=s
-          echo "status=success" >> $GITHUB_OUTPUT
-
-      - name: Check space usage
-        if: (!cancelled())
-        run: df -hT
-
-      # 核心步骤：从编译产物中提取内核文件
+      # 步骤3：从编译产物中提取内核镜像文件
       - name: Extract Kernel Image
-        if: steps.compile.outputs.status == 'success'
         run: |
           # 查找目标目录 - 优先查找 mediatek 相关目录
+          echo "正在查找内核镜像文件..."
           TARGET_DIR=$(find openwrt/bin/targets -type d -path '*/mediatek/*' | head -1)
           
-          # 如果没找到，查找任何有效的目标目录（至少包含一些 .bin 或 .img 文件）
+          # 如果没找到，查找任何有效的目标目录
           if [ -z "$TARGET_DIR" ]; then
-            echo "Mediatek target not found, looking for any target directory with build artifacts..."
-            TARGET_DIR=$(find openwrt/bin/targets -mindepth 2 -maxdepth 2 -type d -exec sh -c 'ls "$1"/*.bin 2>/dev/null || ls "$1"/*.img 2>/dev/null' _ {} \; -print -quit)
+            echo "Mediatek target not found, looking for any target directory..."
+            TARGET_DIR=$(find openwrt/bin/targets -mindepth 2 -maxdepth 2 -type d | head -1)
           fi
           
           if [ -z "$TARGET_DIR" ]; then
-            echo "Error: Could not find target directory with build artifacts"
-            echo "Available directories:"
+            echo "错误：未找到编译产物目录！"
+            echo "可用目录："
             find openwrt/bin/targets -type d
             exit 1
           fi
           
           cd "$TARGET_DIR"
-          echo "Looking for kernel in: $PWD"
+          echo "在目录中查找内核: $PWD"
           
-          # 寻找并重命名内核镜像文件，常见的命名模式有kernel.bin、initramfs-kernel.bin等
-          KERNEL_FILE=$(find . -type f \( -name "*kernel*.bin" -o -name "*boot*.img" \) | head -1)
+          # 查找内核文件，常见命名格式
+          KERNEL_FILE=$(find . -type f \( -name "*kernel*.bin" -o -name "*boot*.img" \) | head -n 1)
           
-          if [ -z "$KERNEL_FILE" ]; then
-            echo "Error: Could not find kernel file"
-            echo "Available files:"
-            ls -la
+          if [ -n "$KERNEL_FILE" ]; then
+            echo "找到内核文件: $KERNEL_FILE"
+            cp "$KERNEL_FILE" ./kernel-mt7981-custom.bin
+            echo "内核文件已提取并重命名为: kernel-mt7981-custom.bin"
+            ls -lh ./kernel-mt7981-custom.bin
+            echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+          else
+            echo "错误：未在编译产物中找到内核文件！"
+            echo "当前目录内容："
+            find . -type f | head -20
             exit 1
           fi
-          
-          echo "Found kernel file: $KERNEL_FILE"
-          cp "$KERNEL_FILE" ./kernel-mt7981-custom.bin
-          echo "Kernel image extracted as: kernel-mt7981-custom.bin"
-          echo "FIRMWARE=$PWD" >> $GITHUB_ENV
 
+      # 步骤4：将提取出的内核文件上传为工作流产物，供下载
       - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
-        if: steps.compile.outputs.status == 'success'
         with:
           name: mt7981-kernel
           path: ${{ env.FIRMWARE }}/kernel-mt7981-custom.bin
           if-no-files-found: error
+          retention-days: 7
