@@ -18,12 +18,17 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
-    # 启用缓存以显著加速后续编译
+    # 缓存设置必须与 `strategy` 保持同一级缩进
     strategy:
-      cache:
-        paths:
-          - openwrt/dl/
-          - openwrt/build_dir/
+      fail-fast: false
+      # 可以在这里添加矩阵构建，例如：
+      # matrix:
+      #   kernel: [5.4, 5.15, 6.1]
+    cache:
+      paths:
+        - openwrt/dl/
+        - openwrt/build_dir/
+
 
     steps:
       # 步骤1：检出本仓库代码（获取你上传的 .config 文件）
