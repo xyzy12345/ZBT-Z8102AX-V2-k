@@ -37,8 +37,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build OpenWrt
-        uses: P3TERX/Actions-OpenWrt@main
+      - name: Build OpenWrt (Custom)
+        
+         run: | 
+          
+          # 1. 克隆你选择的源码（例如：hanwckf/immortalwrt-mt798x）
+            git clone --depth=1 ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt_source
+            cd openwrt_source
+          
+          # 2. 应用你的自定义配置文件
+          cp ../${{ env.CONFIG_FILE }} .config
+          
+          # 3. 下载feeds并编译（这是一个最简流程，可能需要根据实际情况调整）
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          make defconfig
+          make download -j8
+          make -j$(nproc) V=s
         with:
           target: mediatek/filogic
           # 硬件型号选择，此选择适用于大多数MT7981设备
